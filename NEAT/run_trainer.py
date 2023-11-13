@@ -30,10 +30,16 @@ best_current_gen = None
 
 single_agent_env_path = "./Builds/SingleAgent/3DBallBalancing.exe"
 multi_agent_env_path = "./Builds/MultipleAgents/3DBallBalancing.exe"
+engine_config_channel = EngineConfigurationChannel()
+
+if is_training:
+    engine_config_channel.set_configuration_parameters(width=160, height=90, quality_level=0, time_scale=1)
+else:
+    engine_config_channel.set_configuration_parameters(width=2048 , height=1080)
 
 if is_multi:
-        env = UnityEnvironment(file_name=multi_agent_env_path, worker_id=6, seed=0, no_graphics = no_graphics)
-else:
+    env = UnityEnvironment(file_name=multi_agent_env_path, worker_id=6, seed=0, no_graphics = no_graphics, side_channels=[engine_config_channel])
+else:   
     env = UnityEnvironment(file_name=single_agent_env_path, worker_id=5, seed=0, no_graphics = no_graphics)
 
 # Reset the enviroment to get it ready  
@@ -42,35 +48,27 @@ env.reset()
 
 behavior_specs = env.behavior_specs
 behavior_name = list(behavior_specs)[0]
-behavior_names = env.behavior_specs.keys()
-
-
-
 print(f"Name of the behavior : {behavior_name}")
-print("Number of observations : ", behavior_specs[behavior_name].observation_specs)
-print(behavior_specs[behavior_name].observation_specs[0].observation_type)
+spec = env.behavior_specs[behavior_name]
 
-# Define global variables to store running statistics
-running_means = np.zeros(8)
-running_variances = np.ones(8)
-running_count = 1
+# Examine the number of observations per Agent
+print("Number of observations : ", len(spec.observation_specs))
 
-def update_running_statistics(observation):
-    global running_means, running_variances, running_count
-    running_count += 1
-    delta = observation - running_means
-    running_means += delta / running_count
-    running_variances += delta * (observation - running_means)
+# Is there a visual observation ?
+# Visual observation have 3 dimensions: Height, Width and number of channels
+vis_obs = any(len(spec.shape) == 3 for spec in spec.observation_specs)
+print("Is there a visual observation ?", vis_obs)
 
-def normalize_observation(observation):
-    global running_means, running_variances, running_count
-    # Avoid division by zero in the first step
-    if running_count > 1:
-        stds = np.sqrt(running_variances / (running_count - 1))
-        normalized_obs = (observation - running_means) / stds
-    else:
-        normalized_obs = observation - running_means
-    return normalized_obs
+# Is the Action continuous or multi-discrete ?
+if spec.action_spec.continuous_size > 0:
+  print(f"There are {spec.action_spec.continuous_size} continuous actions")
+if spec.action_spec.is_discrete():
+  print(f"There are {spec.action_spec.discrete_size} discrete actions")
+
+# For discrete actions only : How many different options does each action has ?
+if spec.action_spec.discrete_size > 0:
+  for action, branch_size in enumerate(spec.action_spec.discrete_branches):
+    print(f"Action number {action} has {branch_size} different options")
 
 def exit_handler():
     # visualize.plot_stats(stats, view=True, filename="NEAT/result/in_progress/recurrent-fitness"+str(generation)+".svg", label="CTRNN")
@@ -78,7 +76,7 @@ def exit_handler():
     with open(save_nn_destination, 'wb') as w:
         pickle.dump(best_current_gen, w)
     print("EXITING")
-    env.close
+    env.close()
 
 atexit.register(exit_handler)
 
@@ -90,7 +88,6 @@ def run_agent(genomes, cfg):
     :return: Best genome from generation.
     """
     decision_steps, terminal_steps = env.get_steps(behavior_name)
-    print(decision_steps, terminal_steps)
     # Keep track of agent ids for Unity and NEAT
     agent_to_local_map = {}
     local_to_agent_map = {}
@@ -127,7 +124,7 @@ def run_agent(genomes, cfg):
         input("Press Enter to star training...")
 
     while not done:
-        actions = np.zeros(shape=(agent_count, 2))
+        actions = np.ones(shape=(agent_count, 2))
         nn_input = np.zeros(shape=(agent_count, 8)) 
         
         # Decision step - agent requests action
@@ -135,12 +132,10 @@ def run_agent(genomes, cfg):
         for agent in range(agent_count):  
             if local_to_agent_map[agent] in decision_steps:
                 decision_steps = decision_steps
-            else:
-                continue
-            step = decision_steps[local_to_agent_map[agent]]
-            observation = np.concatenate(step.obs[:])
-            update_running_statistics(observation)
-            nn_input[agent] = normalize_observation(observation)
+                step = decision_steps[local_to_agent_map[agent]]
+                observation = np.concatenate(step.obs[:])
+                nn_input[agent] = observation
+            
             # print(f"Input for Agent{agent}: ", nn_input[agent])
 
         # normalize inputs  
@@ -223,7 +218,7 @@ def run_agent(genomes, cfg):
         with open('NEAT/result/in_progress/best_genome'+str(generation)+'.pkl', 'wb') as f:
             pickle.dump(best_genome_current_generation, f)
     # Clean the environment for a new generation.
-    env.reset()
+    # env.reset() #weedo need to do this as this is done in  unity itself
     print("\nFinished generation")
 
 # Run trained simulation
@@ -247,6 +242,7 @@ def run_agent_sim(genome, cfg):
                 # Check if agent requests action:
                 continuous_actions = [action[:]]
                 env.set_action_for_agent(behavior_name=behavior_name, agent_id=agent_id, action=ActionTuple(discrete=None, continuous=np.array(continuous_actions)))
+            
             env.step()
             decision_steps, terminal_steps = env.get_steps(behavior_name)
 
