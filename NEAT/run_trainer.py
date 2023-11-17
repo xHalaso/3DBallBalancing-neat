@@ -13,12 +13,14 @@ from mlagents_envs.base_env import ActionTuple
 from mlagents_envs.side_channel.engine_configuration_channel import EngineConfigurationChannel
 
 save_nn_destination = 'NEAT/result/best.pkl'
+# save_nn_destination = 'NEAT/result/in_progress/best_genome125.pkl'
 result_destination= 'NEAT/result/in_progres/best_genome5.pkl'
+save_training_progress_prefix = 'NEAT/result/fitness/'
 
 # [PARAMETERS]  
-max_generations = 1000 # Max number of generations
-is_training = True   
-no_graphics = False
+max_generations = 200 # Max number of generations
+is_training = False   
+no_graphics = is_training
 is_multi = True
 is_debug = False
 load_from_checkpoint = False
@@ -29,18 +31,18 @@ generation = 0
 best_current_gen = None
 
 single_agent_env_path = "./Builds/SingleAgent/3DBallBalancing.exe"
-multi_agent_env_path = "./Builds/MultipleAgents/3DBallBalancing.exe"
+multi_agent_env_path = "./Builds/60Agents/3DBallBalancing.exe"
 engine_config_channel = EngineConfigurationChannel()
 
-if is_training:
-    engine_config_channel.set_configuration_parameters(width=160, height=90, quality_level=0, time_scale=1)
+if is_training:#width=160, height=90, 
+    engine_config_channel.set_configuration_parameters(width=2048 , height=1080, quality_level=0, time_scale=100)
 else:
     engine_config_channel.set_configuration_parameters(width=2048 , height=1080)
 
-if is_multi:
-    env = UnityEnvironment(file_name=multi_agent_env_path, worker_id=6, seed=0, no_graphics = no_graphics, side_channels=[engine_config_channel])
-else:   
-    env = UnityEnvironment(file_name=single_agent_env_path, worker_id=5, seed=0, no_graphics = no_graphics)
+if is_multi and is_training:
+    env = UnityEnvironment(file_name=multi_agent_env_path, seed=0, no_graphics = no_graphics, side_channels=[engine_config_channel])
+elif not is_training:   
+    env = UnityEnvironment(file_name=single_agent_env_path, seed=0, no_graphics = no_graphics)
 
 # Reset the enviroment to get it ready  
 print("ENV Has been reset")
@@ -71,14 +73,18 @@ if spec.action_spec.discrete_size > 0:
     print(f"Action number {action} has {branch_size} different options")
 
 def exit_handler():
-    # visualize.plot_stats(stats, view=True, filename="NEAT/result/in_progress/recurrent-fitness"+str(generation)+".svg", label="CTRNN")
-    # visualize.plot_species(stats, view=True, filename="NEAT/result/in_progress/recurrent-speciation"+str(generation)+".svg", label="CTRNN")
-    with open(save_nn_destination, 'wb') as w:
-        pickle.dump(best_current_gen, w)
+    visualize.plot_stats(stats, view=True, filename="NEAT/result/in_progress/recurrent-fitness"+str(generation)+".svg", label="CTRNN")
+    visualize.plot_species(stats, view=True, filename="NEAT/result/in_progress/recurrent-speciation"+str(generation)+".svg", label="CTRNN")
+    with open("NEAT/result/on_exit/best_genome.pkl", 'wb') as w:
+        pickle.dump(best_genome_current_generation, w)
     print("EXITING")
     env.close()
 
-atexit.register(exit_handler)
+# Save training progress to files
+def save_progress(statistics):
+    statistics.save_genome_fitness(filename=save_training_progress_prefix+"genome_fitness.csv")
+    statistics.save_species_count(filename=save_training_progress_prefix+"species_count.csv")
+    statistics.save_species_fitness(filename=save_training_progress_prefix+"species_fitness.csv")
 
 def run_agent(genomes, cfg):
     """
@@ -88,6 +94,8 @@ def run_agent(genomes, cfg):
     :return: Best genome from generation.
     """
     decision_steps, terminal_steps = env.get_steps(behavior_name)
+    agent_count = len(decision_steps.agent_id)
+
     # Keep track of agent ids for Unity and NEAT
     agent_to_local_map = {}
     local_to_agent_map = {}
@@ -103,9 +111,13 @@ def run_agent(genomes, cfg):
     policies = []
 
     for _, g in genomes:
-        policy = neat.nn.FeedForwardNetwork.create(g, cfg)
-        policies.append(policy)
         g.fitness = 0
+        policy = neat.nn.RecurrentNetwork.create(g, cfg)
+        policies.append(policy)
+
+    print(f"Policies length {len(policies)}")
+
+    #input("Press Enter to star training...")
 
     print("Population size (GENOMES): " + str(len(genomes)))
 
@@ -115,7 +127,6 @@ def run_agent(genomes, cfg):
     total_reward = 0.0
 
     # Agents
-    agent_count = len(decision_steps.agent_id)
     print("Agent count: ", agent_count)
 
     terminal_agents = [] # these are agents that finished and removed
@@ -123,7 +134,9 @@ def run_agent(genomes, cfg):
     if is_debug:
         input("Press Enter to star training...")
 
-    while not done:
+    done = [False if i < len(policies) else True for i in range(agent_count)]
+
+    while not all(done):
         actions = np.ones(shape=(agent_count, 2))
         nn_input = np.zeros(shape=(agent_count, 8)) 
         
@@ -131,11 +144,7 @@ def run_agent(genomes, cfg):
         # Collect observations from the agents requesting input
         for agent in range(agent_count):  
             if local_to_agent_map[agent] in decision_steps:
-                decision_steps = decision_steps
-                step = decision_steps[local_to_agent_map[agent]]
-                observation = np.concatenate(step.obs[:])
-                nn_input[agent] = observation
-            
+                nn_input[agent] = np.asarray(decision_steps[local_to_agent_map[agent]].obs[:])
             # print(f"Input for Agent{agent}: ", nn_input[agent])
 
         # normalize inputs  
@@ -158,10 +167,11 @@ def run_agent(genomes, cfg):
             for agent in range(agent_count):
                 # Check if agent requests action:
                 if local_to_agent_map[agent] in decision_steps:
-                    continuous_actions = [actions[agent, :]]
-                    action_tuple = ActionTuple(discrete=None, continuous=np.array(continuous_actions))
-                    if local_to_agent_map[agent] in decision_steps:
-                        env.set_action_for_agent(behavior_name=behavior_name, agent_id=local_to_agent_map[agent], action=action_tuple)
+                    continuous_actions = np.array([actions[agent, :]])
+                    # continuous_actions *= 2 + 0.5
+                    continuous_actions *= 2
+                    action_tuple = ActionTuple(discrete=None, continuous=continuous_actions)
+                    env.set_action_for_agent(behavior_name=behavior_name, agent_id=local_to_agent_map[agent], action=action_tuple)
         
         # Move the simulation forward
         env.step() # Does not mean 1 step in Unity. Runs until next decision step
@@ -170,11 +180,12 @@ def run_agent(genomes, cfg):
         decision_steps, terminal_steps = env.get_steps(behavior_name)
 
         # Remove agents that are terminal
-        if terminal_steps:
-            for step in terminal_steps: # the step is agent's id
-                if step not in terminal_agents:
-                    terminal_agents.append(step)
-
+        # if terminal_steps:
+        #     for step in terminal_steps: # the step is agent's id
+        #         if step not in terminal_agents:
+        #             terminal_agents.append(step)
+        for agent in terminal_steps:
+            done[local_to_agent_map[agent]] = True
         # Collect reward
         for agent in range(agent_count):
             # Keep track of unity and neat id's
@@ -194,10 +205,9 @@ def run_agent(genomes, cfg):
                         reward))
             # print("Fitness: " , str(genomes[agent][1].fitness))
 
-        if len(terminal_agents) >= agent_count:
-            print([ta for ta in terminal_agents])
-            print("--- [All agents are terminal!] ---")
-            done = True
+
+    print("--- [All agents are terminal!] ---")
+
        # save_progress(stats)
     if len(decision_steps) != 0:
             # Reward status
@@ -213,13 +223,14 @@ def run_agent(genomes, cfg):
     
     if generation % 25 == 0: # save interval = 25
         print("\nSAVED PLOTS | GENERATION " + str(generation))
-        # visualize.plot_stats(stats, view=True, filename="NEAT/result/in_progress/recurrent-fitness"+str(generation)+".svg", label="CTRNN")
-        # visualize.plot_species(stats, view=True, filename="NEAT/result/in_progress/recurrent-speciation"+str(generation)+".svg", label="CTRNN")
+        save_progress(stats)
         with open('NEAT/result/in_progress/best_genome'+str(generation)+'.pkl', 'wb') as f:
             pickle.dump(best_genome_current_generation, f)
     # Clean the environment for a new generation.
-    # env.reset() #weedo need to do this as this is done in  unity itself
+    env.reset() #weedo need to do this as this is done in  unity itself
     print("\nFinished generation")
+
+
 
 # Run trained simulation
 def run_agent_sim(genome, cfg):
@@ -240,7 +251,8 @@ def run_agent_sim(genome, cfg):
                 print(f"Action for Agent{agent_id}: ", action)
             if len(decision_steps) > 0:
                 # Check if agent requests action:
-                continuous_actions = [action[:]]
+                continuous_actions = np.array([action[:]])
+                continuous_actions *= 2
                 env.set_action_for_agent(behavior_name=behavior_name, agent_id=agent_id, action=ActionTuple(discrete=None, continuous=np.array(continuous_actions)))
             
             env.step()
@@ -257,6 +269,7 @@ def run_agent_sim(genome, cfg):
         env.reset()
 
 if __name__ == "__main__":
+    atexit.register(exit_handler)
     config_path = "NEAT/config_ctrnn"
     config = neat.config.Config(neat.DefaultGenome, neat.DefaultReproduction,
                                 neat.DefaultSpeciesSet, neat.DefaultStagnation, config_path)
@@ -294,6 +307,9 @@ if __name__ == "__main__":
                             filename="NEAT/result/best_genome-enabled.gv", show_disabled=False)
         visualize.draw_net(config, best_genome, view=True, node_names=node_names,
                             filename="NEAT/result/best_genome-enabled-pruned.gv", show_disabled=False, prune_unused=True)
+        visualize.plot_stats(stats, view=True, filename="NEAT/result/in_progress/recurrent-fitness"+str(generation)+".svg", label="CTRNN")
+        visualize.plot_species(stats, view=True, filename="NEAT/result/in_progress/recurrent-speciation"+str(generation)+".svg", label="CTRNN")
+        env.close()
     else:
         with open(save_nn_destination, "rb") as f:
             genome = pickle.load(f)

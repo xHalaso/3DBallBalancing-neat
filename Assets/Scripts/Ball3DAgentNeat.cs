@@ -18,7 +18,7 @@ public class Ball3DAgentNeat : Agent
     EnvironmentParameters m_ResetParams;
 
     public bool useVectorObservations;
-
+    private int m_StepCount;
     public override void Initialize()
     {
         m_BallRb = ball.GetComponent<Rigidbody>();
@@ -32,27 +32,26 @@ public class Ball3DAgentNeat : Agent
         // Total of 8 observations   
         if (true) // if (useVectorObservations)
         {
-            var rotationX = gameObject.transform.rotation.x;
             var rotationZ = gameObject.transform.rotation.z;
+            var rotationX = gameObject.transform.rotation.x;
             var displacement = ball.transform.position - gameObject.transform.position;
             var ballVelocity = m_BallRb.velocity;
 
             // Normalizations
-           /* rotationX = (rotationX - (-1)) / (1 - (-1)) - 1;
-            rotationZ = (rotationZ - (-1)) / (1 - (-1)) - 1;
-*/
-/*            displacement.x = (displacement.x - (-3.0f)) / (3.0f - (-3.0f)) - 1;
-            displacement.z = (displacement.z - (-3.0f)) / (3.0f - (-3.0f)) - 1;
-            displacement.y = (displacement.x - (-2.0f)) / (4.0f - (-2.0f)) - 1;
+            /* rotationX = (rotationX - (-1)) / (1 - (-1)) - 1;
+             rotationZ = (rotationZ - (-1)) / (1 - (-1)) - 1;
+ */
+            /*            displacement.x = (displacement.x - (-3.0f)) / (3.0f - (-3.0f)) - 1;
+                        displacement.z = (displacement.z - (-3.0f)) / (3.0f - (-3.0f)) - 1;
+                        displacement.y = (displacement.x - (-2.0f)) / (4.0f - (-2.0f)) - 1;
 
-            ballVelocity.x = (ballVelocity.x - (-3.0f)) / (3.0f - (-3.0f)) - 1;
-            ballVelocity.y = (ballVelocity.y - (-4.0f)) / (0.3f - (-4.0f)) - 1;
-            ballVelocity.z = (ballVelocity.z - (-3.0f)) / (3.0f - (-3.0f)) - 1;*/
+                        ballVelocity.x = (ballVelocity.x - (-3.0f)) / (3.0f - (-3.0f)) - 1;
+                        ballVelocity.y = (ballVelocity.y - (-4.0f)) / (0.3f - (-4.0f)) - 1;
+                        ballVelocity.z = (ballVelocity.z - (-3.0f)) / (3.0f - (-3.0f)) - 1;*/
 
- /*           Debug.Log("Velocities: X " + ballVelocity.x + " Y " + ballVelocity.y + " Z " + ballVelocity.z);
-            Debug.Log("Displacement: " + displacement.ToString());
-            Debug.Log("Rotations: " + rotationX + " " + rotationZ);*/
-
+            /*           Debug.Log("Velocities: X " + ballVelocity.x + " Y " + ballVelocity.y + " Z " + ballVelocity.z);
+                       Debug.Log("Displacement: " + displacement.ToString());*/
+            Debug.Log("Rotations: " + rotationX + " " + rotationZ);
             sensor.AddObservation(rotationZ); // This is a scalar
             sensor.AddObservation(rotationX); // This is a scalar
             sensor.AddObservation(displacement); // This is a Vector3
@@ -62,7 +61,33 @@ public class Ball3DAgentNeat : Agent
 
     public override void OnActionReceived(ActionBuffers actionBuffer)
     {
-        MoveAgent(actionBuffer);
+        var actionZ = 2f * Mathf.Clamp(actionBuffer.ContinuousActions[0], -1f, 1f);
+        var actionX = 2f * Mathf.Clamp(actionBuffer.ContinuousActions[1], -1f, 1f);
+
+        if ((gameObject.transform.rotation.z < 0.25f && actionZ > 0f) ||
+            (gameObject.transform.rotation.z > -0.25f && actionZ < 0f))
+        {
+            gameObject.transform.Rotate(new Vector3(0, 0, 1), actionZ);
+        }
+
+        if ((gameObject.transform.rotation.x < 0.25f && actionX > 0f) ||
+            (gameObject.transform.rotation.x > -0.25f && actionX < 0f))
+        {
+            gameObject.transform.Rotate(new Vector3(1, 0, 0), actionX);
+        }
+        if ((ball.transform.position.y - gameObject.transform.position.y) < -2f ||
+            Mathf.Abs(ball.transform.position.x - gameObject.transform.position.x) > 3f ||
+            Mathf.Abs(ball.transform.position.z - gameObject.transform.position.z) > 3f)
+        {
+           
+            SetReward(-1f/Academy.Instance.StepCount);
+            EndEpisode();
+        }
+        else
+        {
+            SetReward(0.1f);
+        }
+        // MoveAgent(actionBuffer);
     }
 
     public void MoveAgent(ActionBuffers actionBuffer)
@@ -87,8 +112,8 @@ public class Ball3DAgentNeat : Agent
         }
         else
         {
-            //SetReward(0.1f);
-            AddReward(0.1f);
+            SetReward(0.1f);
+            //AddReward(0.1f);
         }
     }
 
@@ -110,9 +135,10 @@ public class Ball3DAgentNeat : Agent
 
     public override void OnEpisodeBegin()
     {
+        ResetAgent();
         m_BallRb.velocity = new Vector3(0f, 0f, 0f);
         ball.transform.position = new Vector3(Random.Range(-1f, 1f), 4.0f, Random.Range(-1f, 1f)) + gameObject.transform.position;
-        ResetAgent();
+
         ResetBall();
     }
 
@@ -128,8 +154,7 @@ public class Ball3DAgentNeat : Agent
         gameObject.transform.rotation = new Quaternion(0f, 0f, 0f, 0f);
         gameObject.transform.Rotate(new Vector3(1, 0, 0), Random.Range(-10.0f, 10.0f));
         gameObject.transform.Rotate(new Vector3(0, 0, 1), Random.Range(-10.0f, 10.0f));
-        gameObject.transform.Rotate(new Vector3(1, 0, 0), Random.Range(-10.0f, 10.0f));
-        gameObject.transform.Rotate(new Vector3(0, 0, 1), Random.Range(-10.0f, 10.0f));
+
     }
 
     private void ResetBall()
