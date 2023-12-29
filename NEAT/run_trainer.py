@@ -19,7 +19,7 @@ save_training_progress_prefix = 'NEAT/result/fitness/'
 
 # [PARAMETERS]  
 max_generations = 200 # Max number of generations
-is_training = False   
+is_training = True   
 no_graphics = is_training
 is_multi = True
 is_debug = False
